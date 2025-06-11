@@ -1,5 +1,6 @@
 import * as dotenv from 'dotenv';
 import { app, BrowserWindow, ipcMain, Menu, dialog } from 'electron';
+import type { Event, IpcMainEvent, IpcMainInvokeEvent } from 'electron';
 import path from 'path';
 import { getSupabaseClient, initializeSupabase } from './supabase';
 import { PrintCommand, PrintJob, PrintJobUpdate } from './types';
@@ -16,7 +17,7 @@ const execAsync = promisify(exec);
 
 // Load environment variables from the appropriate location
 const envPath = app.isPackaged 
-  ? path.join(process.resourcesPath, '.env')
+  ? path.join(app.getAppPath(), 'resources', '.env')
   : path.join(__dirname, '../.env');
 
 // Settings file path
@@ -52,7 +53,7 @@ function getUniqueAgentId(baseAgentId: string): string {
 }
 
 // Load or create settings file
-function loadSettingsFile() {
+function loadSettingsFile(): Record<string, string> {
   try {
     if (fs.existsSync(settingsPath)) {
       const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
@@ -108,7 +109,7 @@ function areSettingsConfigured(): boolean {
 }
 
 // Function to handle initial setup
-async function handleInitialSetup() {
+async function handleInitialSetup(): Promise<boolean> {
   // If settings are not configured, show settings window
   if (!areSettingsConfigured()) {
     createSettingsWindow(true);
@@ -178,7 +179,7 @@ async function isAgentIdInUse(agentId: string): Promise<boolean> {
 }
 
 // Function to save settings with validation
-async function saveSettings(newSettings: Record<string, string>) {
+async function saveSettings(newSettings: Record<string, string>): Promise<{ success: boolean; error?: string }> {
   try {
     // Validate agent ID if it's being changed
     if (newSettings.AGENT_ID && newSettings.AGENT_ID !== settings.AGENT_ID) {
@@ -216,7 +217,7 @@ async function saveSettings(newSettings: Record<string, string>) {
 }
 
 // Function to get current settings
-function getSettings() {
+function getSettings(): Record<string, string> {
   return {
     AGENT_ID: settings.AGENT_ID || process.env.AGENT_ID || '',
     UNIQUE_AGENT_ID: settings.UNIQUE_AGENT_ID || '',
@@ -228,7 +229,7 @@ function getSettings() {
   };
 }
 
-function createSettingsWindow(isInitialSetup: boolean = false) {
+function createSettingsWindow(isInitialSetup: boolean = false): void {
   settingsWindow = new BrowserWindow({
     width: 600,
     height: 400,
@@ -244,7 +245,7 @@ function createSettingsWindow(isInitialSetup: boolean = false) {
   });
 
   // Add error handling for settings window
-  settingsWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+  settingsWindow.webContents.on('did-fail-load', (event: Event, errorCode: number, errorDescription: string) => {
     debugLog('Settings window failed to load:', errorDescription);
     createErrorWindow(`Failed to load settings page. Error: ${errorDescription}`);
   });
@@ -266,7 +267,7 @@ function createSettingsWindow(isInitialSetup: boolean = false) {
   });
 }
 
-function createErrorWindow(message: string) {
+function createErrorWindow(message: string): void {
   const errorWindow = new BrowserWindow({
     width: 600,
     height: 400,
@@ -341,15 +342,20 @@ async function createWindow(): Promise<void> {
     }
   });
 
-  const appUrl = process.env.APP_URL || 'http://localhost:3000/print-agent';
+  const appUrl = settings.APP_URL || process.env.APP_URL || 'http://localhost:3000/print-agent';
+  debugLog('Creating window with URL:', appUrl);
+  debugLog('Current settings:', settings);
   
   try {
     const isAccessible = await checkUrlAccessibility(appUrl);
+    debugLog('URL accessibility check:', { url: appUrl, isAccessible });
+    
     if (!isAccessible) {
       throw new Error(`Cannot connect to ${appUrl}`);
     }
     
     await mainWindow.loadURL(appUrl);
+    debugLog('Window loaded successfully with URL:', appUrl);
     
     if (process.env.NODE_ENV === 'development') {
       mainWindow.webContents.openDevTools();
@@ -359,13 +365,13 @@ async function createWindow(): Promise<void> {
     createErrorWindow(`Unable to connect to ${appUrl}. Please check your internet connection and try again.`);
   }
 
-  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+  mainWindow.webContents.on('did-fail-load', (event: Event, errorCode: number, errorDescription: string) => {
     debugLog('Failed to load:', errorDescription);
     createErrorWindow(`Failed to load ${appUrl}. Error: ${errorDescription}`);
   });
 }
 
-function setAppMenu() {
+function setAppMenu(): void {
   const template: Electron.MenuItemConstructorOptions[] = [
     {
       label: 'File',
@@ -377,6 +383,19 @@ function setAppMenu() {
               createSettingsWindow();
             } else {
               settingsWindow.focus();
+            }
+          }
+        },
+        { type: 'separator' },
+        {
+          label: 'Sign Out',
+          click: () => {
+            debugLog('Sign out menu item clicked');
+            if (mainWindow) {
+              debugLog('Sending electron-sign-out event to renderer');
+              mainWindow.webContents.send('electron-sign-out');
+            } else {
+              debugLog('Main window not found, cannot send sign-out event');
             }
           }
         },
@@ -453,7 +472,7 @@ function setAppMenu() {
   Menu.setApplicationMenu(menu);
 }
 
-async function printPdfLabel(labelUrl: string, options: { printerName?: string; silent?: boolean }) {
+async function printPdfLabel(labelUrl: string, options: { printerName?: string; silent?: boolean }): Promise<void> {
   debugLog('Starting printPdfLabel with:', { labelUrl, options });
   
   if (!labelUrl) throw new Error('Label URL is required');
@@ -497,23 +516,23 @@ async function printPdfLabel(labelUrl: string, options: { printerName?: string; 
     const pdfPrintHtmlPath = path.join(__dirname, '../pdf-print.html');
     const pdfPrintUrl = `file://${pdfPrintHtmlPath}?file=${encodeURIComponent(tempFile)}`;
 
-    printWindow.webContents.on('console-message', (event, level, message) => {
+    printWindow.webContents.on('console-message', (event: Event, level: number, message: string) => {
       debugLog('PDF Window Console:', message);
     });
 
     await printWindow.loadURL(pdfPrintUrl);
 
-    await new Promise((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
         printWindow?.close();
         reject(new Error('PDF rendering timeout'));
       }, 30000);
 
-      const onConsole = (event: Electron.Event, level: number, message: string) => {
+      const onConsole = (event: Event, level: number, message: string) => {
         if (message === 'pdf-rendered') {
           clearTimeout(timeout);
           printWindow.webContents.removeListener('console-message', onConsole);
-          resolve(undefined);
+          resolve();
         }
       };
 
@@ -537,8 +556,8 @@ async function printPdfLabel(labelUrl: string, options: { printerName?: string; 
       landscape: false
     };
 
-    await new Promise((resolve, reject) => {
-      printWindow.webContents.print(printOptions, (success, errorType) => {
+    await new Promise<void>((resolve, reject) => {
+      printWindow.webContents.print(printOptions, (success: boolean, errorType?: string) => {
         if (!success) {
           printWindow.close();
           reject(new Error(errorType || 'Print failed'));
@@ -546,7 +565,7 @@ async function printPdfLabel(labelUrl: string, options: { printerName?: string; 
           // Add a small delay before closing the window to ensure print job is complete
           setTimeout(() => {
             printWindow.close();
-            resolve(undefined);
+            resolve();
           }, 500);
         }
       });
@@ -563,7 +582,7 @@ async function printPdfLabel(labelUrl: string, options: { printerName?: string; 
   }
 }
 
-async function subscribeToPrintJobs() {
+async function subscribeToPrintJobs(): Promise<void> {
   if (!supabaseClient) {
     debugLog('Supabase client not initialized');
     const initialized = await initializeSupabaseWithRetry();
@@ -597,7 +616,7 @@ async function subscribeToPrintJobs() {
   }
 }
 
-async function tryClaimAndPrint(job: PrintJob) {
+async function tryClaimAndPrint(job: PrintJob): Promise<boolean> {
   if (!supabaseClient) {
     debugLog('Supabase client not initialized');
     return false;
@@ -640,7 +659,7 @@ async function tryClaimAndPrint(job: PrintJob) {
   }
 }
 
-async function processNextJob() {
+async function processNextJob(): Promise<void> {
   if (!supabaseClient) {
     debugLog('Supabase client not initialized');
     return;
@@ -705,7 +724,7 @@ async function processNextJob() {
   }
 }
 
-ipcMain.on('print-command', async (event, command: PrintCommand) => {
+ipcMain.on('print-command', async (event: IpcMainEvent, command: PrintCommand) => {
   debugLog('Received print command:', command);
   
   if (!supabaseClient) {
@@ -807,7 +826,7 @@ ipcMain.handle('get-settings', () => {
   return getSettings();
 });
 
-ipcMain.handle('save-settings', async (event, newSettings) => {
+ipcMain.handle('save-settings', async (event: IpcMainInvokeEvent, newSettings: Record<string, string>) => {
   return await saveSettings(newSettings);
 });
 
@@ -843,6 +862,28 @@ ipcMain.handle('get-available-printers', async () => {
     return printers.map(printer => printer.name);
   } catch (error) {
     debugLog('Error getting printers:', error);
+    return [];
+  }
+});
+
+// Update the get-printer-info handler
+ipcMain.handle('get-printer-info', async (event: IpcMainInvokeEvent) => {
+  try {
+    const { stdout } = await execAsync('wmic printer get name,status,default /format:csv');
+    const lines = stdout.split('\n').slice(1).filter(line => line.trim());
+    
+    return lines.map(line => {
+      const [name, status, isDefault] = line.split(',').map(s => s.trim());
+      return {
+        name,
+        description: '',
+        status: status === 'OK' ? 0 : 1,
+        isDefault: isDefault === 'TRUE',
+        options: {}
+      };
+    });
+  } catch (error) {
+    debugLog('Error getting printer info:', error);
     return [];
   }
 });

@@ -237,6 +237,9 @@
                 }
                 const select = document.getElementById('printerName');
                 const currentValue = select.value;
+                debugLog('Current printer value:', currentValue);
+                
+                // Clear and rebuild options
                 select.innerHTML = '<option value="">Select a printer...</option>';
                 printers.forEach(printer => {
                     const option = document.createElement('option');
@@ -244,9 +247,20 @@
                     option.textContent = printer;
                     select.appendChild(option);
                 });
-                if (currentValue) {
+
+                // Try to restore the previous selection
+                if (currentValue && printers.includes(currentValue)) {
                     select.value = currentValue;
+                    debugLog('Restored previous printer selection:', currentValue);
+                } else {
+                    // If previous selection not found, try to get from settings
+                    const settings = await ipcRenderer.invoke('get-settings');
+                    if (settings.PRINTER_NAME && printers.includes(settings.PRINTER_NAME)) {
+                        select.value = settings.PRINTER_NAME;
+                        debugLog('Restored printer from settings:', settings.PRINTER_NAME);
+                    }
                 }
+
                 if (printers.length === 0) {
                     showStatus('No printers found. Please make sure your printer is connected and try refreshing the list.', 'error');
                     alert('No printers found. Please make sure your printer is connected and try refreshing the list.');
@@ -262,17 +276,23 @@
         document.getElementById('settingsForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const environment = document.getElementById('environment').value;
+            const appUrl = ENVIRONMENT_URLS[environment];
+            console.log('Selected environment:', environment);
+            console.log('Setting APP_URL to:', appUrl);
+            
             const settings = {
                 AGENT_ID: document.getElementById('agentId').value,
                 PRINTER_NAME: document.getElementById('printerName').value,
                 SUPABASE_URL: document.getElementById('supabaseUrl').value,
                 SUPABASE_SERVICE_ROLE_KEY: document.getElementById('supabaseKey').value,
-                APP_URL: ENVIRONMENT_URLS[environment],
+                APP_URL: appUrl,
                 DEBUG: document.getElementById('debugFlag').checked ? 'true' : 'false'
             };
             try {
                 await ipcRenderer.invoke('save-settings', settings);
                 showStatus('Settings saved successfully!', 'success');
+                // Notify main process to reload with new settings
+                await ipcRenderer.invoke('reload-with-settings', settings);
                 setTimeout(() => {
                     window.close();
                 }, 1000);
