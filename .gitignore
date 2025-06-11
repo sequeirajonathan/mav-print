@@ -48,6 +48,7 @@ temp/
 
 # Settings file
 settings.json
+unique-agent-id
 
 # Editor directories and files
 .idea/

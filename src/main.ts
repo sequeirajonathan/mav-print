@@ -454,23 +454,32 @@ function setAppMenu() {
 }
 
 async function printPdfLabel(labelUrl: string, options: { printerName?: string; silent?: boolean }) {
+  debugLog('Starting printPdfLabel with:', { labelUrl, options });
+  
   if (!labelUrl) throw new Error('Label URL is required');
 
   const printerName = options.printerName || defaultPrinterName;
+  debugLog('Using printer:', printerName);
+  
   if (!printerName) throw new Error('No printer name provided and no default printer set in .env');
 
   const tempDir = os.tmpdir();
   const tempFile = path.join(tempDir, `label-${Date.now()}.pdf`);
+  debugLog('Temporary file path:', tempFile);
 
   try {
+    debugLog('Downloading PDF from URL:', labelUrl);
     const response = await axios.get(labelUrl, { responseType: 'arraybuffer' });
     const pdfBuffer = Buffer.from(response.data);
     fs.writeFileSync(tempFile, pdfBuffer);
+    debugLog('PDF downloaded and saved to temp file');
 
     if (options.silent) {
+      debugLog('Printing silently to printer:', printerName);
       await directPrint(tempFile, {
         printer: printerName
       });
+      debugLog('Silent print completed');
       return;
     }
 
@@ -697,7 +706,10 @@ async function processNextJob() {
 }
 
 ipcMain.on('print-command', async (event, command: PrintCommand) => {
+  debugLog('Received print command:', command);
+  
   if (!supabaseClient) {
+    debugLog('Supabase client not initialized');
     event.reply('print-response', {
       success: false,
       message: 'Supabase client not initialized',
@@ -707,6 +719,30 @@ ipcMain.on('print-command', async (event, command: PrintCommand) => {
   }
 
   try {
+    // Handle test prints differently
+    if (command.orderId === 'TEST-PRINT') {
+      debugLog('Processing test print command');
+      const labelUrl = command.settings?.labelUrl || command.labelUrl;
+      if (!labelUrl) {
+        throw new Error('Label URL is required for test print');
+      }
+
+      debugLog('Test print settings:', {
+        labelUrl,
+        printerName: command.settings?.printerName || command.printerName || defaultPrinterName,
+        silent: command.settings?.silent
+      });
+
+      await printPdfLabel(labelUrl, {
+        printerName: command.settings?.printerName || command.printerName || defaultPrinterName,
+        silent: command.settings?.silent
+      });
+
+      event.reply('print-response', { success: true, message: 'Test print completed successfully' });
+      return;
+    }
+
+    // Handle regular print jobs
     const { data, error } = await supabaseClient
       .from('print_jobs')
       .update({
