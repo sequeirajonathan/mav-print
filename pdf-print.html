@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>PDF Print</title>
+  <style>
+    html, body { margin: 0; padding: 0; width: 100vw; height: 100vh; }
+    #pdf-canvas { display: block; margin: 0 auto; max-width: 100vw; max-height: 100vh; }
+  </style>
+</head>
+<body>
+  <canvas id="pdf-canvas"></canvas>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>
+    // DEBUG flag can be set via query string (?debug=true) or hardcoded
+    const urlParams = new URLSearchParams(window.location.search);
+    const DEBUG = urlParams.get('debug') === 'true';
+
+    function debugLog(...args) {
+      if (DEBUG) {
+        // eslint-disable-next-line no-console
+        console.log('[DEBUG]', ...args);
+      }
+    }
+    debugLog('PDF print renderer script started');
+    // Get PDF path from query string
+    const pdfPath = urlParams.get('file');
+    debugLog('PDF path from query string:', pdfPath);
+    if (!pdfPath) {
+      document.body.innerText = 'No PDF file specified!';
+      console.error('No PDF file specified!');
+    } else {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      pdfjsLib.getDocument(pdfPath).promise.then(pdf => {
+        debugLog('PDF loaded, numPages:', pdf.numPages);
+        return pdf.getPage(1);
+      }).then(page => {
+        const canvas = document.getElementById('pdf-canvas');
+        const context = canvas.getContext('2d');
+        // Fill PDF page to 9x17 inch label (648x1224 points), cropping if needed
+        const LABEL_WIDTH = 648;  // 9 inches * 72 points/inch
+        const LABEL_HEIGHT = 936; // 13 inches * 72 points/inch
+
+        const unscaledViewport = page.getViewport({ scale: 1 });
+        // Fit PDF page to width and add extra vertical offset
+        const scale = (LABEL_WIDTH / unscaledViewport.width) * 0.95; // Increased scale to 95%
+        const viewport = page.getViewport({ scale });
+        canvas.width = LABEL_WIDTH;
+        canvas.height = LABEL_HEIGHT;
+
+        context.clearRect(0, 0, canvas.width, canvas.height);
+
+        const offsetX = (LABEL_WIDTH - viewport.width) / 2;
+        const extraTop = 10; // Reduced offset to 0.14 inch (10 points)
+        const offsetY = (LABEL_HEIGHT - viewport.height) / 2 + extraTop;
+        context.save();
+        context.translate(offsetX, offsetY);
+
+        page.render({ canvasContext: context, viewport: viewport }).promise
+          .then(() => {
+            context.restore();
+            debugLog('pdf-rendered');
+          })
+          .catch(err => {
+            document.body.innerText = 'Error rendering PDF: ' + err;
+            debugLog('Error rendering PDF:', err);
+          });
+      }).catch(err => {
+        document.body.innerText = 'Error loading PDF: ' + err;
+        debugLog('Error loading or rendering PDF:', err);
+      });
+    }
+  </script>
+</body>
+</html> 

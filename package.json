@@ -1,0 +1,67 @@
+{
+  "name": "mav-print",
+  "version": "1.0.0",
+  "description": "MAV Print Agent",
+  "main": "dist/main.js",
+  "scripts": {
+    "start": "tsc && electron .",
+    "dev": "tsc -w",
+    "build": "tsc",
+    "watch": "tsc -w",
+    "pack": "npx electron-builder --dir",
+    "dist": "npx electron-builder",
+    "make-win": "npm run build && npx electron-builder --win --x64 --config.win.signAndEditExecutable=false",
+    "clean": "rimraf dist release node_modules package-lock.json %LOCALAPPDATA%/electron-builder/Cache && npm install"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^20.11.19",
+    "electron": "^28.1.0",
+    "electron-builder": "^24.9.1",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.3",
+    "@types/pdfkit": "^0.13.9",
+    "@types/uuid": "^10.0.0",
+    "axios": "^1.9.0",
+    "dotenv": "^16.5.0",
+    "pdf-to-printer": "^5.6.0",
+    "pdfkit": "^0.17.1",
+    "uuid": "^11.1.0"
+  },
+  "build": {
+    "appId": "com.mavcollectibles.printagent",
+    "productName": "MAV Print Agent",
+    "win": {
+      "target": "nsis",
+      "icon": "assets/mav_collectibles.ico",
+      "signAndEditExecutable": false
+    },
+    "files": [
+      "dist/**/*",
+      "settings.html"
+    ],
+    "extraResources": [
+      {
+        "from": ".env.template",
+        "to": ".env"
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "installerIcon": "assets/mav_collectibles.ico",
+      "uninstallerIcon": "assets/mav_collectibles.ico",
+      "installerHeaderIcon": "assets/mav_collectibles.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}
