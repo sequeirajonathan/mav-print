@@ -52,7 +52,7 @@ DEBUG=false
 
 1. Start the development server:
 ```bash
-npm run dev
+npm run start
 ```
 
 2. Build the application:
@@ -62,7 +62,7 @@ npm run build
 
 3. Package the application:
 ```bash
-npm run package
+npm run make-win
 ```
 
 ## Configuration
