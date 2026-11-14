@@ -11,13 +11,13 @@ import axios from 'axios';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { debugLog } from './debug';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 
 const execAsync = promisify(exec);
 
 // Load environment variables from the appropriate location
 const envPath = app.isPackaged 
-  ? path.join(app.getAppPath(), 'resources', '.env')
+  ? path.join(process.resourcesPath, '.env')
   : path.join(__dirname, '../.env');
 
 // Settings file path
@@ -26,7 +26,7 @@ const settingsPath = app.isPackaged
   : path.join(__dirname, '../settings.json');
 
 // Load initial environment variables
-dotenv.config({ path: envPath });
+dotenv.config({ path: envPath, quiet: true });
 
 // Function to generate or load unique agent ID
 function getUniqueAgentId(baseAgentId: string): string {
@@ -42,7 +42,7 @@ function getUniqueAgentId(baseAgentId: string): string {
     }
 
     // Generate new unique ID if none exists
-    const uniqueId = uuidv4();
+    const uniqueId = randomUUID();
     fs.writeFileSync(uniqueIdPath, uniqueId);
     return `${baseAgentId}-${uniqueId}`;
   } catch (error) {
