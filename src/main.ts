@@ -2,7 +2,7 @@ import * as dotenv from 'dotenv';
 import { app, BrowserWindow, ipcMain, Menu, dialog } from 'electron';
 import type { Event, IpcMainEvent, IpcMainInvokeEvent } from 'electron';
 import path from 'path';
-import { getSupabaseClient, initializeSupabase } from './supabase';
+import { getSupabaseClient, setAgentSession, isValidSession } from './supabase';
 import { PrintCommand, PrintJob, PrintJobUpdate } from './types';
 import fs from 'fs';
 import os from 'os';
@@ -52,11 +52,20 @@ function getUniqueAgentId(baseAgentId: string): string {
   }
 }
 
+const LEGACY_SECRET_KEYS = ['SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_URL'];
+
 // Load or create settings file
 function loadSettingsFile(): Record<string, string> {
   try {
     if (fs.existsSync(settingsPath)) {
       const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      // Older versions stored the Supabase service-role key here. The agent now
+      // gets a scoped session from the web app instead, so remove it from disk.
+      if (LEGACY_SECRET_KEYS.some((key) => key in settings)) {
+        LEGACY_SECRET_KEYS.forEach((key) => delete settings[key]);
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+        debugLog('Removed legacy Supabase credentials from settings.json');
+      }
       // If we have a base agent ID, generate the unique version
       if (settings.AGENT_ID) {
         settings.UNIQUE_AGENT_ID = getUniqueAgentId(settings.AGENT_ID);
@@ -76,35 +85,20 @@ const settings = loadSettingsFile();
 const agentId = settings.AGENT_ID || process.env.AGENT_ID || 'agent-unknown';
 const defaultPrinterName = settings.PRINTER_NAME || process.env.PRINTER_NAME;
 let supabaseClient: ReturnType<typeof getSupabaseClient> | null = null;
+let printJobsChannel: ReturnType<NonNullable<ReturnType<typeof getSupabaseClient>>['channel']> | null = null;
 
 let isPrinting = false;
 let retryCount = 0;
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 5000; // 5 seconds
 
-// Function to initialize Supabase client with retry
-async function initializeSupabaseWithRetry(): Promise<boolean> {
-  try {
-    supabaseClient = await initializeSupabase();
-    if (!supabaseClient) {
-      debugLog('Failed to initialize Supabase client');
-      return false;
-    }
-    return true;
-  } catch (error) {
-    debugLog('Error initializing Supabase:', error);
-    return false;
-  }
-}
-
 // Function to check if required settings are configured
 function areSettingsConfigured(): boolean {
   const currentSettings = loadSettingsFile();
   return !!(
     currentSettings.AGENT_ID && 
-    currentSettings.PRINTER_NAME && 
-    currentSettings.SUPABASE_URL && 
-    currentSettings.SUPABASE_SERVICE_ROLE_KEY
+    currentSettings.PRINTER_NAME &&
+    currentSettings.APP_URL
   );
 }
 
@@ -116,13 +110,8 @@ async function handleInitialSetup(): Promise<boolean> {
     return false;
   }
 
-  // Initialize Supabase client
-  const initialized = await initializeSupabaseWithRetry();
-  if (!initialized) {
-    createErrorWindow('Failed to connect to database. Please check your settings and try again.');
-    return false;
-  }
-
+  // The database connection starts once a print-agent account signs in
+  // inside the main window (see the 'auth-session' handler).
   return true;
 }
 
@@ -196,12 +185,10 @@ async function saveSettings(newSettings: Record<string, string>): Promise<{ succ
     if (!newSettings.PRINTER_NAME) {
       throw new Error('Printer name is required');
     }
-    if (!newSettings.SUPABASE_URL) {
-      throw new Error('Supabase URL is required');
+    if (!newSettings.APP_URL) {
+      throw new Error('Environment is required');
     }
-    if (!newSettings.SUPABASE_SERVICE_ROLE_KEY) {
-      throw new Error('Supabase service role key is required');
-    }
+    LEGACY_SECRET_KEYS.forEach((key) => delete newSettings[key]);
 
     fs.writeFileSync(settingsPath, JSON.stringify(newSettings, null, 2));
     // Reload settings
@@ -222,8 +209,6 @@ function getSettings(): Record<string, string> {
     AGENT_ID: settings.AGENT_ID || process.env.AGENT_ID || '',
     UNIQUE_AGENT_ID: settings.UNIQUE_AGENT_ID || '',
     PRINTER_NAME: settings.PRINTER_NAME || process.env.PRINTER_NAME || '',
-    SUPABASE_URL: settings.SUPABASE_URL || process.env.SUPABASE_URL || '',
-    SUPABASE_SERVICE_ROLE_KEY: settings.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '',
     APP_URL: settings.APP_URL || process.env.APP_URL || 'http://localhost:3000/print-agent',
     DEBUG: settings.DEBUG || process.env.DEBUG || 'false'
   };
@@ -584,13 +569,10 @@ async function printPdfLabel(labelUrl: string, options: { printerName?: string; 
 
 async function subscribeToPrintJobs(): Promise<void> {
   if (!supabaseClient) {
-    debugLog('Supabase client not initialized');
-    const initialized = await initializeSupabaseWithRetry();
-    if (!initialized || !supabaseClient) {
-      debugLog('Failed to initialize Supabase client for subscription');
-      return;
-    }
+    debugLog('Not signed in yet; print job subscription deferred');
+    return;
   }
+  if (printJobsChannel) return;
 
   try {
     const channel = supabaseClient
@@ -609,7 +591,8 @@ async function subscribeToPrintJobs(): Promise<void> {
         }
       );
 
-    await channel.subscribe();
+    printJobsChannel = channel;
+    channel.subscribe();
     debugLog('Subscribed to print jobs');
   } catch (error) {
     debugLog('Error setting up print job subscription:', error);
@@ -821,18 +804,76 @@ ipcMain.on('print-command', async (event: IpcMainEvent, command: PrintCommand) =
   }
 });
 
-// Add IPC handlers for settings
-ipcMain.handle('get-settings', () => {
+// Settings IPC is only accepted from the local settings window, never from
+// the remote web app loaded in the main window.
+function fromSettingsWindow(event: IpcMainInvokeEvent | IpcMainEvent): boolean {
+  const url = event.senderFrame?.url ?? '';
+  const ok = settingsWindow !== null && event.sender === settingsWindow.webContents &&
+    (url.startsWith('file://') || url.startsWith('http://localhost'));
+  if (!ok) debugLog('Rejected settings IPC from', url);
+  return ok;
+}
+
+ipcMain.handle('get-settings', (event: IpcMainInvokeEvent) => {
+  if (!fromSettingsWindow(event)) throw new Error('Not allowed');
   return getSettings();
 });
 
 ipcMain.handle('save-settings', async (event: IpcMainInvokeEvent, newSettings: Record<string, string>) => {
-  return await saveSettings(newSettings);
+  if (!fromSettingsWindow(event)) throw new Error('Not allowed');
+  const result = await saveSettings(newSettings);
+  if (!result.success) throw new Error(result.error);
+  return result;
+});
+
+ipcMain.handle('reload-with-settings', (event: IpcMainInvokeEvent) => {
+  if (!fromSettingsWindow(event)) throw new Error('Not allowed');
+  // Restart so the new environment, agent ID and printer take effect cleanly.
+  setTimeout(() => {
+    app.relaunch();
+    app.exit(0);
+  }, 1200);
+  return true;
 });
 
 // Add IPC handler for checking if settings are configured
-ipcMain.handle('check-settings-configured', () => {
+ipcMain.handle('check-settings-configured', (event: IpcMainInvokeEvent) => {
+  if (!fromSettingsWindow(event)) throw new Error('Not allowed');
   return areSettingsConfigured();
+});
+
+// Session handoff from the MAV web app (see src/supabase.ts).
+ipcMain.on('auth-session', async (event: IpcMainEvent, session: unknown) => {
+  const appUrl = getSettings().APP_URL;
+  const senderUrl = event.senderFrame?.url ?? '';
+  const fromMainWindow = mainWindow !== null && event.sender === mainWindow.webContents;
+  let sameOrigin = false;
+  try {
+    sameOrigin = new URL(senderUrl).origin === new URL(appUrl).origin;
+  } catch {
+    sameOrigin = false;
+  }
+  if (!fromMainWindow || !sameOrigin) {
+    debugLog('Rejected auth-session from', senderUrl);
+    return;
+  }
+
+  if (session === null) {
+    printJobsChannel = null;
+    supabaseClient = setAgentSession(null);
+    return;
+  }
+  if (!isValidSession(session)) {
+    debugLog('Ignored malformed auth-session payload');
+    return;
+  }
+
+  const firstSignIn = !supabaseClient;
+  supabaseClient = setAgentSession(session);
+  if (firstSignIn) {
+    await subscribeToPrintJobs();
+    processNextJob();
+  }
 });
 
 // Add IPC handler for getting available printers
@@ -888,7 +929,8 @@ ipcMain.handle('get-printer-info', async (event: IpcMainInvokeEvent) => {
   }
 });
 
-ipcMain.on('quit-app', () => {
+ipcMain.on('quit-app', (event: IpcMainEvent) => {
+  if (!fromSettingsWindow(event)) return;
   app.quit();
 });
 
@@ -899,10 +941,9 @@ app.whenReady().then(async () => {
   const isConfigured = await handleInitialSetup();
   
   if (isConfigured) {
-    // Launch main window if already configured
+    // Launch main window if already configured. Printing starts after a
+    // print-agent account signs in there.
     createWindow();
-    await subscribeToPrintJobs();
-    processNextJob();
   }
 });
 

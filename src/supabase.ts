@@ -1,117 +1,67 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
-import fs from 'fs';
-import path from 'path';
-import { app } from 'electron';
 import { debugLog } from './debug';
 
-interface SupabaseSettings {
-  SUPABASE_URL: string;
-  SUPABASE_SERVICE_ROLE_KEY: string;
+/**
+ * The print agent holds no credentials of its own. The MAV web app, after a
+ * print-agent account signs in, hands over its Supabase URL, publishable key
+ * and a short-lived access token (and every refreshed token after that).
+ * Row level security limits that token to reading and updating print jobs.
+ */
+export interface AgentSession {
+  accessToken: string;
+  expiresAt: number;
+  userId: string;
+  supabaseUrl: string;
+  supabasePublishableKey: string;
 }
 
 let supabase: SupabaseClient | null = null;
-let initializationAttempts = 0;
-const MAX_INITIALIZATION_ATTEMPTS = 3;
-const INITIALIZATION_RETRY_DELAY = 5000; // 5 seconds
+let clientKey = '';
+let accessToken: string | null = null;
 
-function getSettings(): SupabaseSettings {
-  const settingsPath = app.isPackaged
-    ? path.join(app.getPath('userData'), 'settings.json')
-    : path.join(__dirname, '../settings.json');
-
+export function isValidSession(value: unknown): value is AgentSession {
+  if (!value || typeof value !== 'object') return false;
+  const s = value as Record<string, unknown>;
+  if (typeof s.accessToken !== 'string' || typeof s.userId !== 'string') return false;
+  if (typeof s.supabaseUrl !== 'string' || typeof s.supabasePublishableKey !== 'string') return false;
   try {
-    if (fs.existsSync(settingsPath)) {
-      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-      return {
-        SUPABASE_URL: settings.SUPABASE_URL || '',
-        SUPABASE_SERVICE_ROLE_KEY: settings.SUPABASE_SERVICE_ROLE_KEY || ''
-      };
-    }
-  } catch (error) {
-    debugLog('Error loading Supabase settings:', error);
-  }
-  return { SUPABASE_URL: '', SUPABASE_SERVICE_ROLE_KEY: '' };
-}
-
-function validateSettings(settings: SupabaseSettings): boolean {
-  if (!settings.SUPABASE_URL || !settings.SUPABASE_SERVICE_ROLE_KEY) {
-    debugLog('Invalid Supabase settings: Missing URL or service role key');
-    return false;
-  }
-
-  try {
-    new URL(settings.SUPABASE_URL);
-    return true;
-  } catch (error) {
-    debugLog('Invalid Supabase URL:', error);
+    const url = new URL(s.supabaseUrl);
+    const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+    return url.protocol === 'https:' || (isLocal && url.protocol === 'http:');
+  } catch {
     return false;
   }
 }
 
-export async function initializeSupabase(): Promise<SupabaseClient | null> {
-  if (supabase) {
-    return supabase;
-  }
-
-  const settings = getSettings();
-  
-  if (!validateSettings(settings)) {
-    debugLog('Invalid Supabase settings, cannot initialize client');
-    return null;
-  }
-
-  try {
-    supabase = createClient(
-      settings.SUPABASE_URL,
-      settings.SUPABASE_SERVICE_ROLE_KEY,
-      {
-        auth: {
-          autoRefreshToken: false,
-          persistSession: false
-        }
-      }
-    );
-
-    // Test the connection
-    const { error } = await supabase.from('print_jobs').select('count').limit(1);
-    if (error) {
-      throw error;
+/** Applies a session from the web app (null = signed out). Returns the client, if any. */
+export function setAgentSession(session: AgentSession | null): SupabaseClient | null {
+  if (!session) {
+    accessToken = null;
+    if (supabase) {
+      void supabase.removeAllChannels();
+      supabase = null;
+      clientKey = '';
     }
-
-    debugLog('Supabase client initialized successfully');
-    initializationAttempts = 0;
-    return supabase;
-  } catch (error) {
-    debugLog('Error initializing Supabase client:', error);
-    supabase = null;
-    
-    if (initializationAttempts < MAX_INITIALIZATION_ATTEMPTS) {
-      initializationAttempts++;
-      debugLog(`Retrying initialization in ${INITIALIZATION_RETRY_DELAY/1000} seconds... (Attempt ${initializationAttempts}/${MAX_INITIALIZATION_ATTEMPTS})`);
-      
-      return new Promise((resolve) => {
-        setTimeout(async () => {
-          resolve(await initializeSupabase());
-        }, INITIALIZATION_RETRY_DELAY);
-      });
-    }
-    
+    debugLog('Print agent signed out; Supabase client cleared');
     return null;
   }
-}
 
-export function getSupabaseClient(): SupabaseClient | null {
-  if (!supabase) {
-    debugLog('Supabase client not initialized, attempting initialization...');
-    return null;
+  accessToken = session.accessToken;
+  const key = `${session.supabaseUrl}|${session.supabasePublishableKey}`;
+  if (!supabase || key !== clientKey) {
+    if (supabase) void supabase.removeAllChannels();
+    supabase = createClient(session.supabaseUrl, session.supabasePublishableKey, {
+      // Requests and Realtime use the token handed over by the web app.
+      accessToken: async () => accessToken,
+    });
+    clientKey = key;
+    debugLog('Supabase client created for', session.supabaseUrl);
   }
+  // Push the fresh token to open Realtime channels.
+  void supabase.realtime.setAuth(session.accessToken);
   return supabase;
 }
 
-export function resetSupabaseClient(): void {
-  if (supabase) {
-    supabase = null;
-    initializationAttempts = 0;
-    debugLog('Supabase client reset');
-  }
+export function getSupabaseClient(): SupabaseClient | null {
+  return accessToken ? supabase : null;
 }
