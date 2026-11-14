@@ -138,9 +138,8 @@
         <div class="mb-3">
             <label for="environment" class="form-label">Environment:</label>
             <select id="environment" class="form-select" required>
-                <option value="local">Local</option>
-                <option value="dev">Development</option>
                 <option value="production">Production</option>
+                <option value="local">Local development</option>
             </select>
         </div>
         <div class="mb-3">
@@ -156,14 +155,10 @@
                 <button type="button" id="refreshPrinters" class="btn">Refresh List</button>
             </div>
         </div>
-        <div class="mb-3">
-            <label for="supabaseUrl" class="form-label">Supabase URL:</label>
-            <input type="text" id="supabaseUrl" class="form-control" required>
-        </div>
-        <div class="mb-3">
-            <label for="supabaseKey" class="form-label">Supabase Service Role Key:</label>
-            <input type="password" id="supabaseKey" class="form-control" required>
-        </div>
+        <p class="form-text mb-3">
+            No database keys are stored on this computer. After you save, sign in with
+            a print-agent account in the main window.
+        </p>
         <div class="form-check form-switch mb-3">
             <input class="form-check-input" type="checkbox" id="debugFlag">
             <label class="form-check-label" for="debugFlag">Enable Debug Logging</label>
@@ -180,9 +175,8 @@
 
         // Environment URLs
         const ENVIRONMENT_URLS = {
-            local: 'http://localhost:3000/print-agent',
-            dev: 'https://mav-collectibles-git-dev-jonathan-sequeiras-projects.vercel.app/print-agent',
-            production: 'https://mavcollectibles.com/print-agent'
+            production: 'https://mavcollectibles.com/print-agent',
+            local: 'http://localhost:3000/print-agent'
         };
 
         let DEBUG_FLAG = false;
@@ -210,12 +204,10 @@
             try {
                 const settings = await ipcRenderer.invoke('get-settings');
                 document.getElementById('agentId').value = settings.AGENT_ID || '';
-                document.getElementById('supabaseUrl').value = settings.SUPABASE_URL || '';
-                document.getElementById('supabaseKey').value = settings.SUPABASE_SERVICE_ROLE_KEY || '';
                 document.getElementById('debugFlag').checked = settings.DEBUG === 'true';
                 // Set environment based on current URL
                 const currentUrl = settings.APP_URL || '';
-                const environment = Object.entries(ENVIRONMENT_URLS).find(([_, url]) => url === currentUrl)?.[0] || 'local';
+                const environment = Object.entries(ENVIRONMENT_URLS).find(([_, url]) => url === currentUrl)?.[0] || 'production';
                 document.getElementById('environment').value = environment;
                 if (settings.PRINTER_NAME) {
                     document.getElementById('printerName').value = settings.PRINTER_NAME;
@@ -283,8 +275,6 @@
             const settings = {
                 AGENT_ID: document.getElementById('agentId').value,
                 PRINTER_NAME: document.getElementById('printerName').value,
-                SUPABASE_URL: document.getElementById('supabaseUrl').value,
-                SUPABASE_SERVICE_ROLE_KEY: document.getElementById('supabaseKey').value,
                 APP_URL: appUrl,
                 DEBUG: document.getElementById('debugFlag').checked ? 'true' : 'false'
             };

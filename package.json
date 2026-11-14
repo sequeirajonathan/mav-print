@@ -16,21 +16,17 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "@types/node": "^20.11.19",
-    "electron": "^28.1.0",
-    "electron-builder": "^24.9.1",
-    "rimraf": "^6.0.1",
-    "typescript": "^5.3.3"
+    "@types/node": "^24.19.2",
+    "electron": "^45.3.2",
+    "electron-builder": "^26.18.0",
+    "rimraf": "^6.1.4",
+    "typescript": "^7.0.2"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.39.3",
-    "@types/pdfkit": "^0.13.9",
-    "@types/uuid": "^10.0.0",
-    "axios": "^1.9.0",
-    "dotenv": "^16.5.0",
-    "pdf-to-printer": "^5.6.0",
-    "pdfkit": "^0.17.1",
-    "uuid": "^11.1.0"
+    "@supabase/supabase-js": "^2.119.0",
+    "axios": "^1.21.1",
+    "dotenv": "^18.0.10",
+    "pdf-to-printer": "^5.8.1"
   },
   "build": {
     "appId": "com.mavcollectibles.printagent",
@@ -42,7 +38,8 @@
     },
     "files": [
       "dist/**/*",
-      "settings.html"
+      "settings.html",
+      "pdf-print.html"
     ],
     "extraResources": [
       {

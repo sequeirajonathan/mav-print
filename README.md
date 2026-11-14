@@ -42,8 +42,6 @@ An Electron-based application that automatically prints shipping labels for orde
    ```env
    AGENT_ID=your-agent-id
    PRINTER_NAME=your-printer-name
-   SUPABASE_URL=your-supabase-url
-   SUPABASE_SERVICE_ROLE_KEY=your-supabase-key
    APP_URL=http://localhost:3000/print-agent
    DEBUG=false
    ```
@@ -78,16 +76,24 @@ Each agent instance requires a unique identifier. The system automatically appen
 ### Environment Variables
 - `AGENT_ID`: Your agent identifier  
 - `PRINTER_NAME`: Default printer name  
-- `SUPABASE_URL`: Supabase project URL  
-- `SUPABASE_SERVICE_ROLE_KEY`: Supabase service role key  
-- `APP_URL`: Application URL  
+- `APP_URL`: The MAV web app's `/print-agent` page for the environment (production or local)  
 - `DEBUG`: Enable/disable debug logging  
+
+### Security model
+The agent stores **no database credentials**. Sign in inside the main window with an
+account whose role is `PRINT_AGENT` (an admin sets this in the web app's Roles tab).
+The web app then hands the agent that account's short-lived access token, plus its
+environment's public Supabase URL and publishable key, and keeps sending refreshed
+tokens. Row level security limits the agent to reading and updating print jobs.
+Signing out (File → Sign Out) stops the agent. Older versions stored a Supabase
+service-role key in `settings.json`; it is deleted automatically on first launch.
 
 ## Usage
 
 1. Launch the application  
 2. Configure your settings if prompted  
-3. The agent will automatically:  
+3. Sign in with your print-agent account  
+4. The agent will automatically:  
    - Connect to the cloud service  
    - Monitor for new print jobs  
    - Print labels when jobs are received  
